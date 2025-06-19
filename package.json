@@ -1,19 +1,49 @@
 {
   "name": "authorsight-export",
-  "version": "1.0.0",
-  "description": "",
-  "main": "src/cli.js",
+  "version": "0.0.1",
+  "description": "A CLI utility that allows you to export books sales data from Packt AuthorSight for your own historic backup and analysis",
+  "main": "dist/cli.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc && chmod +x dist/cli.js",
+    "lint:fix": "biome check --write .",
+    "test:lint": "biome check .",
+    "test:typecheck": "tsc --noEmit",
+    "test": "npm run test:lint && npm run test:typecheck"
   },
-  "keywords": [],
-  "author": "",
+  "files": [
+    "dist"
+  ],
+  "author": {
+    "name": "Luciano Mammino",
+    "email": "lucianomammino@gmail.com",
+    "url": "http://loige.co"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lmammino/authorsight-export"
+  },
+  "bugs": {
+    "url": "https://github.com/lmammino/authorsight-export/issues"
+  },
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "Packt",
+    "AuthorSight",
+    "export",
+    "books",
+    "sales",
+    "data",
+    "CLI"
+  ],
   "packageManager": "pnpm@10.11.0",
   "devDependencies": {
     "@biomejs/biome": "2.0.0",
     "@types/node": "^24.0.3",
+    "lefthook": "^1.11.14",
     "typescript": "^5.8.3"
   },
   "dependencies": {

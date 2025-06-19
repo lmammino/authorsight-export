@@ -20,4 +20,11 @@ export const DATA_TYPES = [
     totalKeys: [], // not used
     granularity: 'yearly',
   },
+  {
+    type: 'revenue_quarterly',
+    endpoint: 'quarterly',
+    csvFields: ['Amazon', 'Direct', 'Other'],
+    totalKeys: [], // not used
+    granularity: 'yearly',
+  },
 ]

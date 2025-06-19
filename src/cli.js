@@ -1,0 +1,215 @@
+#!/usr/bin/env node
+
+import { existsSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+import axios from 'axios'
+import { wrapper } from 'axios-cookiejar-support'
+import cliProgress from 'cli-progress'
+import { Command } from 'commander'
+import dayjs from 'dayjs'
+import { parse } from 'node-html-parser'
+import { CookieJar } from 'tough-cookie'
+
+const VERSION = '1.0.0'
+
+const program = new Command()
+
+program
+  .name('packt-sales-fetcher')
+  .description(
+    'Fetch Kindle and Print sales from Packt Author portal and export in Hive format',
+  )
+  .version(VERSION)
+  .option('-s, --session <cookie>', 'Packt authorsight_session cookie')
+  .option(
+    '-o, --output <directory>',
+    'Output directory for Hive-style data files',
+    '.',
+  )
+  .parse(process.argv)
+
+const options = program.opts()
+const authorsightSession = options.session || process.env.AUTHORSIGHT_SESSION
+const outputDir = resolve(options.output)
+
+if (!authorsightSession) {
+  console.error('\n❌ Error: Missing authorsight_session.')
+  console.error(
+    'Provide it using:\n  - the --session option\n  - or the AUTHORSIGHT_SESSION environment variable.\n',
+  )
+  program.help({ error: true })
+}
+
+function* getYearMonthRange(publishDate) {
+  const start = dayjs(publishDate)
+  const end = dayjs()
+  let current = start.startOf('month')
+  while (current.isBefore(end)) {
+    yield { year: current.year(), month: current.month() + 1 }
+    current = current.add(1, 'month')
+  }
+}
+
+async function fetchSales(bookId, year, month, client, retries = 5) {
+  const url = `https://authors.packt.com/graph-data/amazon-daily/${bookId}/${year}/${month}`
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await client.get(url, {
+        headers: { Accept: 'application/json' },
+      })
+      return response.data
+    } catch (err) {
+      const status = err.response?.status
+      const isRetriable = status >= 500 && status < 600
+
+      if (attempt === retries || !isRetriable) {
+        throw err
+      }
+
+      const waitTime = 500 * 2 ** attempt // 500ms, 1s, 2s, 4s, ...
+      await delay(waitTime)
+    }
+  }
+}
+
+async function discoverBooks(client) {
+  const response = await client.get(
+    'https://authors.packt.com/reports/published',
+  )
+  const html = parse(response.data)
+  const rows = html.querySelectorAll('#datatable-publish-table tbody tr')
+
+  return rows
+    .map((row) => {
+      const onclick = row.getAttribute('onclick')
+      const bookIdMatch = onclick.match(/published\/([A-Z0-9]+)/)
+      const bookId = bookIdMatch ? bookIdMatch[1] : null
+
+      const titleEl = row.querySelector('td[data-title="Title"] span.content')
+      const title = titleEl?.text.trim()
+
+      const dateEl = row.querySelector(
+        'td[data-title="Published on"] span.content',
+      )
+      const date = dayjs(dateEl?.text.trim(), 'DD MMMM, YYYY').format(
+        'YYYY-MM-DD',
+      )
+
+      return { id: bookId, title, publishDate: date }
+    })
+    .filter((book) => book.id && book.title && book.publishDate)
+}
+
+// normalizes a timestamp in the format "1st Jan, 2023" to "YYYY-MM-DD"
+function normalizeLabel(label) {
+  return dayjs(
+    label.replace(/^(\d+)(st|nd|rd|th)/, '$1'),
+    'D MMM, YYYY',
+  ).format('YYYY-MM-DD')
+}
+
+function normalizeLabelsInData(data) {
+  if (!data || !data.labels) return data
+  const normalizedLabels = data.labels.map((label) => normalizeLabel(label))
+  return {
+    ...data,
+    labels: normalizedLabels,
+  }
+}
+
+async function saveData(bookId, year, month, data) {
+  const monthStr = String(month).padStart(2, '0')
+  const dir = join(
+    outputDir,
+    `book=${bookId}`,
+    `year=${year}`,
+    `month=${monthStr}`,
+  )
+  await mkdir(dir, { recursive: true })
+
+  const jsonPath = join(dir, 'data.json')
+  await writeFile(
+    jsonPath,
+    JSON.stringify(normalizeLabelsInData(data), null, 2),
+    'utf-8',
+  )
+
+  const headers = ['date', 'print_units', 'kindle_units']
+  const lines = data.labels.map((label, index) => {
+    const normalizedDate = normalizeLabel(label)
+    const print = data.data.print_units[index] ?? 0
+    const kindle = data.data.kindle_units[index] ?? 0
+    return `"${normalizedDate}",${print},${kindle}`
+  })
+
+  const csvPath = join(dir, 'data.csv')
+  const csvContent = [headers.join(','), ...lines].join('\n')
+  await writeFile(csvPath, csvContent, 'utf-8')
+}
+
+if (!existsSync(outputDir)) {
+  await mkdir(outputDir, { recursive: true })
+}
+
+const jar = new CookieJar()
+jar.setCookieSync(
+  `authorsight_session=${authorsightSession}`,
+  'https://authors.packt.com',
+)
+const client = wrapper(axios.create({ jar, withCredentials: true }))
+
+const books = await discoverBooks(client)
+console.log(`📚 Discovered ${books.length} books`)
+
+const tasks = []
+for (const book of books) {
+  for (const { year, month } of getYearMonthRange(book.publishDate)) {
+    tasks.push({ book, year, month })
+  }
+}
+
+const progress = new cliProgress.SingleBar(
+  {
+    format: '📦 Progress |{bar}| {percentage}% | {value}/{total} requests',
+    barCompleteChar: '█',
+    barIncompleteChar: '░',
+    hideCursor: true,
+  },
+  cliProgress.Presets.shades_classic,
+)
+
+progress.start(tasks.length, 0)
+
+const totalsByBook = {}
+
+for (const task of tasks) {
+  const { book, year, month } = task
+  try {
+    const data = await fetchSales(book.id, year, month, client)
+    await saveData(book.id, year, month, data)
+
+    if (!totalsByBook[book.id]) {
+      totalsByBook[book.id] = { title: book.title, print: 0, kindle: 0 }
+    }
+
+    totalsByBook[book.id].print += data?.data?.total_print_units || 0
+    totalsByBook[book.id].kindle += data?.data?.total_kindle_units || 0
+  } catch (err) {
+    console.error(
+      `❌ Error for ${book.id} ${year}-${String(month).padStart(2, '0')}: ${err.message}`,
+    )
+  }
+  progress.increment()
+}
+
+progress.stop()
+
+console.log('\n📊 Sales Summary')
+for (const [id, summary] of Object.entries(totalsByBook)) {
+  console.log(
+    ` - ${summary.title} (${id}): Print=${summary.print}, Kindle=${summary.kindle}`,
+  )
+}

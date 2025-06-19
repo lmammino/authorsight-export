@@ -1,6 +1,6 @@
 {
   "name": "authorsight-export",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A CLI utility that allows you to export books sales data from Packt AuthorSight for your own historic backup and analysis",
   "main": "dist/cli.js",
   "type": "module",

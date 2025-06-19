@@ -85,9 +85,11 @@ async function fetchSales(bookId, year, month, client, type, retries = 5) {
   const { endpoint, granularity } = DATA_TYPES.find((t) => t.type === type)
 
   const url =
-    granularity === 'yearly'
-      ? `https://authors.packt.com/graph-data/${endpoint}/${bookId}/${year}`
-      : `https://authors.packt.com/graph-data/${endpoint}/${bookId}/${year}/${month}`
+    granularity === 'global'
+      ? `https://authors.packt.com/graph-data/${endpoint}/${bookId}`
+      : granularity === 'yearly'
+        ? `https://authors.packt.com/graph-data/${endpoint}/${bookId}/${year}`
+        : `https://authors.packt.com/graph-data/${endpoint}/${bookId}/${year}/${month}`
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -161,15 +163,13 @@ async function saveData(type, bookId, year, month, data) {
   await mkdir(dir, { recursive: true })
 
   const jsonPath = join(dir, 'data.json')
-  const jsonData = granularity === 'yearly' ? data : normalizeLabelsInData(data)
+  const jsonData =
+    granularity === 'monthly' ? normalizeLabelsInData(data) : data
   await writeFile(jsonPath, JSON.stringify(jsonData, null, 2), 'utf-8')
 
   const headers = ['date', ...csvFields]
   const lines = data.labels.map((label, index) => {
-    const date =
-      granularity === 'yearly'
-        ? label // Use "January", "February", etc.
-        : normalizeLabel(label)
+    const date = granularity === 'monthly' ? normalizeLabel(label) : label
 
     const values = csvFields.map((f) => data.data[f]?.[index] ?? 0)
     return `"${date}",${values.join(',')}`
@@ -193,6 +193,9 @@ const client = wrapper(axios.create({ jar, withCredentials: true }))
 
 const books = await discoverBooks(client)
 console.log(`📚 Discovered ${books.length} books`)
+for (const book of books) {
+  console.log(` - ${book.title} (${book.id}): Published on ${book.publishDate}`)
+}
 
 const filteredBooks = options.books
   ? books.filter((b) => options.books.includes(b.id))
@@ -201,7 +204,9 @@ const filteredBooks = options.books
 const tasks = []
 for (const { type, granularity } of selectedDataTypes) {
   for (const book of filteredBooks) {
-    if (granularity === 'monthly') {
+    if (granularity === 'global') {
+      tasks.push({ book, type })
+    } else if (granularity === 'monthly') {
       for (const { year, month } of getYearMonthRange(book.publishDate)) {
         tasks.push({ book, type, year, month })
       }
@@ -227,43 +232,17 @@ const progress = new cliProgress.SingleBar(
 
 progress.start(tasks.length, 0)
 
-const totalsByBook = {}
-
 for (const task of tasks) {
   const { book, year, month, type } = task
   try {
     const data = await fetchSales(book.id, year, month, client, type)
     await saveData(type, book.id, year, month, data)
-
-    if (!totalsByBook[book.id]) {
-      totalsByBook[book.id] = {
-        title: book.title,
-        print: 0,
-        digital: 0,
-        kindle: 0,
-      }
-    }
-
-    const { totalKeys } = DATA_TYPES.find((t) => t.type === type)
-    totalsByBook[book.id].print += data.data[totalKeys[0]] || 0
-    if (type === 'amazon_daily') {
-      totalsByBook[book.id].kindle += data.data[totalKeys[1]] || 0
-    } else if (type === 'direct_daily') {
-      totalsByBook[book.id].digital += data.data[totalKeys[1]] || 0
-    }
   } catch (err) {
     console.error(
-      `❌ Error for ${type} ${book.id} ${year}-${String(month).padStart(2, '0')}: ${err.message}`,
+      `❌ Error for ${type} ${book.id} year=${year} month=${String(month).padStart(2, '0')}: ${err.message}`,
     )
   }
   progress.increment()
 }
 
 progress.stop()
-
-console.log('\n📊 Sales Summary')
-for (const [id, summary] of Object.entries(totalsByBook)) {
-  console.log(
-    ` - ${summary.title} (${id}): Print=${summary.print}, Kindle=${summary.kindle}`,
-  )
-}

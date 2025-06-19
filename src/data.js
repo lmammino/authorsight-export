@@ -27,4 +27,11 @@ export const DATA_TYPES = [
     totalKeys: [], // not used
     granularity: 'yearly',
   },
+  {
+    type: 'revenue_annual',
+    endpoint: 'annual',
+    csvFields: ['Amazon', 'Direct', 'Other'],
+    totalKeys: [], // not used
+    granularity: 'global', // 1 request for all years
+  },
 ]

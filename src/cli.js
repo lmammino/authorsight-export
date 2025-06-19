@@ -11,6 +11,7 @@ import { Command } from 'commander'
 import dayjs from 'dayjs'
 import { parse } from 'node-html-parser'
 import { CookieJar } from 'tough-cookie'
+import { DATA_TYPES } from './data.js'
 
 const VERSION = '1.0.0'
 
@@ -52,8 +53,9 @@ function* getYearMonthRange(publishDate) {
   }
 }
 
-async function fetchSales(bookId, year, month, client, retries = 5) {
-  const url = `https://authors.packt.com/graph-data/amazon-daily/${bookId}/${year}/${month}`
+async function fetchSales(bookId, year, month, client, type, retries = 5) {
+  const { endpoint } = DATA_TYPES.find((t) => t.type === type)
+  const url = `https://authors.packt.com/graph-data/${endpoint}/${bookId}/${year}/${month}`
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -64,12 +66,8 @@ async function fetchSales(bookId, year, month, client, retries = 5) {
     } catch (err) {
       const status = err.response?.status
       const isRetriable = status >= 500 && status < 600
-
-      if (attempt === retries || !isRetriable) {
-        throw err
-      }
-
-      const waitTime = 500 * 2 ** attempt // 500ms, 1s, 2s, 4s, ...
+      if (attempt === retries || !isRetriable) throw err
+      const waitTime = 500 * 2 ** attempt
       await delay(waitTime)
     }
   }
@@ -120,16 +118,20 @@ function normalizeLabelsInData(data) {
   }
 }
 
-async function saveData(bookId, year, month, data) {
+async function saveData(type, bookId, year, month, data) {
+  const { csvFields } = DATA_TYPES.find((t) => t.type === type)
   const monthStr = String(month).padStart(2, '0')
+
   const dir = join(
     outputDir,
+    `${type}`,
     `book=${bookId}`,
     `year=${year}`,
     `month=${monthStr}`,
   )
   await mkdir(dir, { recursive: true })
 
+  // Write JSON
   const jsonPath = join(dir, 'data.json')
   await writeFile(
     jsonPath,
@@ -137,12 +139,12 @@ async function saveData(bookId, year, month, data) {
     'utf-8',
   )
 
-  const headers = ['date', 'print_units', 'kindle_units']
+  // Write CSV
+  const headers = ['date', ...csvFields]
   const lines = data.labels.map((label, index) => {
-    const normalizedDate = normalizeLabel(label)
-    const print = data.data.print_units[index] ?? 0
-    const kindle = data.data.kindle_units[index] ?? 0
-    return `"${normalizedDate}",${print},${kindle}`
+    const date = normalizeLabel(label)
+    const values = csvFields.map((f) => data.data[f]?.[index] ?? 0)
+    return `"${date}",${values.join(',')}`
   })
 
   const csvPath = join(dir, 'data.csv')
@@ -167,13 +169,15 @@ console.log(`📚 Discovered ${books.length} books`)
 const tasks = []
 for (const book of books) {
   for (const { year, month } of getYearMonthRange(book.publishDate)) {
-    tasks.push({ book, year, month })
+    for (const { type } of DATA_TYPES) {
+      tasks.push({ book, year, month, type })
+    }
   }
 }
 
 const progress = new cliProgress.SingleBar(
   {
-    format: '📦 Progress |{bar}| {percentage}% | {value}/{total} requests',
+    format: '📦 Download |{bar}| {percentage}% | {value}/{total} requests',
     barCompleteChar: '█',
     barIncompleteChar: '░',
     hideCursor: true,
@@ -186,20 +190,30 @@ progress.start(tasks.length, 0)
 const totalsByBook = {}
 
 for (const task of tasks) {
-  const { book, year, month } = task
+  const { book, year, month, type } = task
   try {
-    const data = await fetchSales(book.id, year, month, client)
-    await saveData(book.id, year, month, data)
+    const data = await fetchSales(book.id, year, month, client, type)
+    await saveData(type, book.id, year, month, data)
 
     if (!totalsByBook[book.id]) {
-      totalsByBook[book.id] = { title: book.title, print: 0, kindle: 0 }
+      totalsByBook[book.id] = {
+        title: book.title,
+        print: 0,
+        digital: 0,
+        kindle: 0,
+      }
     }
 
-    totalsByBook[book.id].print += data?.data?.total_print_units || 0
-    totalsByBook[book.id].kindle += data?.data?.total_kindle_units || 0
+    const { totalKeys } = DATA_TYPES.find((t) => t.type === type)
+    totalsByBook[book.id].print += data.data[totalKeys[0]] || 0
+    if (type === 'amazon_daily') {
+      totalsByBook[book.id].kindle += data.data[totalKeys[1]] || 0
+    } else if (type === 'direct_daily') {
+      totalsByBook[book.id].digital += data.data[totalKeys[1]] || 0
+    }
   } catch (err) {
     console.error(
-      `❌ Error for ${book.id} ${year}-${String(month).padStart(2, '0')}: ${err.message}`,
+      `❌ Error for ${type} ${book.id} ${year}-${String(month).padStart(2, '0')}: ${err.message}`,
     )
   }
   progress.increment()

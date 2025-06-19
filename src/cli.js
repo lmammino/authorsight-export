@@ -14,6 +14,7 @@ import { CookieJar } from 'tough-cookie'
 import { DATA_TYPES } from './data.js'
 
 const VERSION = '1.0.0'
+const supportedDataTypes = DATA_TYPES.map((t) => t.type)
 
 const program = new Command()
 
@@ -29,11 +30,31 @@ program
     'Output directory for Hive-style data files',
     '.',
   )
+  .option(
+    '-b, --books <bookIds>',
+    'Comma-separated list of book IDs to fetch (if empty, fetches all books)',
+    (val) => val.split(',').map((id) => id.trim().toUpperCase()),
+  )
+  .option(
+    '-t, --types <types>',
+    `Comma-separated list of data types to fetch. Supported values: ${supportedDataTypes.join(
+      ',',
+    )}. Default: all`,
+    (val) =>
+      val
+        .split(',')
+        .map((t) => t.trim())
+        .filter((t) => supportedDataTypes.includes(t)),
+    supportedDataTypes,
+  )
   .parse(process.argv)
 
 const options = program.opts()
 const authorsightSession = options.session || process.env.AUTHORSIGHT_SESSION
 const outputDir = resolve(options.output)
+const selectedDataTypes = DATA_TYPES.filter((t) =>
+  options.types.includes(t.type),
+)
 
 if (!authorsightSession) {
   console.error('\n❌ Error: Missing authorsight_session.')
@@ -166,9 +187,13 @@ const client = wrapper(axios.create({ jar, withCredentials: true }))
 const books = await discoverBooks(client)
 console.log(`📚 Discovered ${books.length} books`)
 
+const filteredBooks = options.books
+  ? books.filter((b) => options.books.includes(b.id))
+  : books
+
 const tasks = []
-for (const { type, granularity } of DATA_TYPES) {
-  for (const book of books) {
+for (const { type, granularity } of selectedDataTypes) {
+  for (const book of filteredBooks) {
     if (granularity === 'monthly') {
       for (const { year, month } of getYearMonthRange(book.publishDate)) {
         tasks.push({ book, type, year, month })

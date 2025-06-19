@@ -54,8 +54,12 @@ function* getYearMonthRange(publishDate) {
 }
 
 async function fetchSales(bookId, year, month, client, type, retries = 5) {
-  const { endpoint } = DATA_TYPES.find((t) => t.type === type)
-  const url = `https://authors.packt.com/graph-data/${endpoint}/${bookId}/${year}/${month}`
+  const { endpoint, granularity } = DATA_TYPES.find((t) => t.type === type)
+
+  const url =
+    granularity === 'yearly'
+      ? `https://authors.packt.com/graph-data/${endpoint}/${bookId}/${year}`
+      : `https://authors.packt.com/graph-data/${endpoint}/${bookId}/${year}/${month}`
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -119,30 +123,26 @@ function normalizeLabelsInData(data) {
 }
 
 async function saveData(type, bookId, year, month, data) {
-  const { csvFields } = DATA_TYPES.find((t) => t.type === type)
-  const monthStr = String(month).padStart(2, '0')
+  const { csvFields, granularity } = DATA_TYPES.find((t) => t.type === type)
+  const base = [outputDir, `${type}`, `book=${bookId}`, `year=${year}`]
+  if (granularity === 'monthly') {
+    base.push(`month=${String(month).padStart(2, '0')}`)
+  }
 
-  const dir = join(
-    outputDir,
-    `${type}`,
-    `book=${bookId}`,
-    `year=${year}`,
-    `month=${monthStr}`,
-  )
+  const dir = join(...base)
   await mkdir(dir, { recursive: true })
 
-  // Write JSON
   const jsonPath = join(dir, 'data.json')
-  await writeFile(
-    jsonPath,
-    JSON.stringify(normalizeLabelsInData(data), null, 2),
-    'utf-8',
-  )
+  const jsonData = granularity === 'yearly' ? data : normalizeLabelsInData(data)
+  await writeFile(jsonPath, JSON.stringify(jsonData, null, 2), 'utf-8')
 
-  // Write CSV
   const headers = ['date', ...csvFields]
   const lines = data.labels.map((label, index) => {
-    const date = normalizeLabel(label)
+    const date =
+      granularity === 'yearly'
+        ? label // Use "January", "February", etc.
+        : normalizeLabel(label)
+
     const values = csvFields.map((f) => data.data[f]?.[index] ?? 0)
     return `"${date}",${values.join(',')}`
   })
@@ -167,10 +167,18 @@ const books = await discoverBooks(client)
 console.log(`📚 Discovered ${books.length} books`)
 
 const tasks = []
-for (const book of books) {
-  for (const { year, month } of getYearMonthRange(book.publishDate)) {
-    for (const { type } of DATA_TYPES) {
-      tasks.push({ book, year, month, type })
+for (const { type, granularity } of DATA_TYPES) {
+  for (const book of books) {
+    if (granularity === 'monthly') {
+      for (const { year, month } of getYearMonthRange(book.publishDate)) {
+        tasks.push({ book, type, year, month })
+      }
+    } else if (granularity === 'yearly') {
+      const startYear = dayjs(book.publishDate).year()
+      const currentYear = dayjs().year()
+      for (let year = startYear; year <= currentYear; year++) {
+        tasks.push({ book, type, year })
+      }
     }
   }
 }

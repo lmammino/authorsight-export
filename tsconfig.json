@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "allowArbitraryExtensions": true,
+    "declaration": true,
+    "declarationMap": true,
+    "lib": ["es2023"],
+    "module": "NodeNext",
+    "outDir": "./",
+    "resolveJsonModule": true,
+    "rewriteRelativeImportExtensions": true,
+    "target": "es2022"
+  },
+  // These may be different for your repo:
+  "include": ["./src"],
+  "exclude": ["**/*/*.test.*", "**/*.fixture.*"]
+}

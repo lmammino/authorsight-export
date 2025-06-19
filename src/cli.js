@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import axios from 'axios'
@@ -13,7 +13,14 @@ import { parse } from 'node-html-parser'
 import { CookieJar } from 'tough-cookie'
 import { DATA_TYPES } from './data.js'
 
-const VERSION = '1.0.0'
+async function getVersionFromPkg() {
+  const pkg = await JSON.parse(
+    await readFile(join(import.meta.dirname, '../package.json'), 'utf-8'),
+  )
+  return pkg.version
+}
+
+const VERSION = await getVersionFromPkg()
 const supportedDataTypes = DATA_TYPES.map((t) => t.type)
 
 const program = new Command()

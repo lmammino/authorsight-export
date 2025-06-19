@@ -31,7 +31,10 @@ program
     'Fetch Kindle and Print sales from Packt Author portal and export in Hive format',
   )
   .version(VERSION)
-  .option('-s, --session <cookie>', 'Packt authorsight_session cookie (discouraged, prefer using environment variable AUTHORSIGHT_SESSION)')
+  .option(
+    '-s, --session <cookie>',
+    'Packt authorsight_session cookie (discouraged, prefer using environment variable AUTHORSIGHT_SESSION)',
+  )
   .option(
     '-o, --output <directory>',
     'Output directory for Hive-style data files',
